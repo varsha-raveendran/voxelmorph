@@ -42,6 +42,7 @@ import argparse
 import numpy as np
 import nibabel as nib
 import torch
+from eval_metrics import EvaluationMetrics
 
 # import voxelmorph with pytorch backend
 os.environ['NEURITE_BACKEND'] = 'pytorch'
@@ -85,6 +86,7 @@ input_fixed = torch.from_numpy(fixed).to(device).float().permute(0, 4, 1, 2, 3)
 
 # predict
 moved, warp = model(input_moving, input_fixed, registration=True)
+
 
 # save moved image
 if args.moved:
