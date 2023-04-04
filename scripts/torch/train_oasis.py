@@ -47,6 +47,7 @@ os.environ['VXM_BACKEND'] = 'pytorch'
 import voxelmorph as vxm  # nopep8
 import wandb
 
+
 wandb.init(project="oasis")
 # parse the commandline
 parser = argparse.ArgumentParser()
@@ -85,7 +86,8 @@ parser.add_argument('--int-steps', type=int, default=7,
 parser.add_argument('--int-downsize', type=int, default=2,
                     help='flow downsample factor for integration (default: 2)')
 parser.add_argument('--bidir', action='store_true', help='enable bidirectional cost function')
-
+parser.add_argument('--dice_loss', action='store_true', help='incl dice loss')
+parser.add_argument('--label_list', help='labels')
 # loss hyperparameters
 parser.add_argument('--image-loss', default='mse',
                     help='image reconstruction loss - can be mse or ncc (default: mse)')
@@ -98,8 +100,10 @@ bidir = args.bidir
 # load and prepare training data
 train_files = vxm.py.utils.read_file_list(args.img_list, prefix=args.img_prefix,
                                           suffix=args.img_suffix)
+labels_files = vxm.py.utils.read_file_list(args.label_list)
 assert len(train_files) > 0, 'Could not find any training data.'
-
+assert len(labels_files) > 0, 'Could not find any training data.'
+labels = np.load("/vol/pluto/users/raveendr/code/voxelmorph/data/labels.npz")["labels"]
 # no need to append an extra feature axis if data is multichannel
 add_feat_axis = not args.multichannel
 
@@ -110,6 +114,10 @@ if args.atlas:
     generator = vxm.generators.scan_to_atlas(train_files, atlas,
                                              batch_size=args.batch_size, bidir=args.bidir,
                                              add_feat_axis=add_feat_axis)
+elif args.dice_loss:
+   generator = vxm.generators.semisupervised_2d(train_files, labels_files, labels, 
+                                                atlas_file=None, downsize=1)
+
 else:
     # scan-to-scan generator
     generator = vxm.generators.scan_to_scan(
@@ -159,6 +167,7 @@ else:
 model.to(device)
 model.train()
 
+transformer = vxm.layers.SpatialTransformer((inshape), mode="nearest").to(device)
 # set optimizer
 optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
@@ -181,6 +190,9 @@ else:
 # prepare deformation loss
 losses += [vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss]
 weights += [args.weight]
+if args.dice_loss:
+    dice_loss = vxm.losses.Dice().loss
+
 
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
@@ -202,9 +214,10 @@ for epoch in range(args.initial_epoch, args.epochs):
         inputs = [torch.from_numpy(d).to(device).float().permute(0, 3, 1, 2) for d in inputs]
         y_true = [torch.from_numpy(d).to(device).float().permute(0, 3, 1, 2) for d in y_true]
 
+        
         # run inputs through the model to produce a warped image and flow field
-        y_pred = model(*inputs)
-
+        y_pred = model(inputs[0], inputs[1])
+        
         # calculate total loss
         loss = 0
         loss_list = []
@@ -213,6 +226,17 @@ for epoch in range(args.initial_epoch, args.epochs):
             loss_list.append(curr_loss.item())
             loss += curr_loss
 
+
+        if args.dice_loss:
+            #get warped image
+            #breakpoint()
+            moved_seg = transformer(inputs[2], y_pred[1])
+            
+            curr_loss = dice_loss(y_true[2], moved_seg) * 0.01
+            #print(curr_loss.item())
+            loss += curr_loss
+            loss_list.append(curr_loss.item())
+            
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.item())
 

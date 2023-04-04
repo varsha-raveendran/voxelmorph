@@ -85,7 +85,9 @@ def scan_to_scan(vol_names, bidir=False, batch_size=1, prob_same=0, no_warp=Fals
     gen = volgen(vol_names, batch_size=batch_size, **kwargs)
     while True:
         scan1 = next(gen)[0]
+        
         scan2 = next(gen)[0]
+        
 
         # some induced chance of making source and target equal
         if prob_same > 0 and np.random.rand() < prob_same:
@@ -162,6 +164,7 @@ def semisupervised(vol_names, seg_names, labels, atlas_file=None, downsize=2):
     # internal utility to generate downsampled prob seg from discrete seg
     def split_seg(seg):
         prob_seg = np.zeros((*seg.shape[:4], len(labels)))
+        
         for i, label in enumerate(labels):
             prob_seg[0, ..., i] = seg[0, ..., 0] == label
         return prob_seg[:, ::downsize, ::downsize, ::downsize, :]
@@ -177,8 +180,9 @@ def semisupervised(vol_names, seg_names, labels, atlas_file=None, downsize=2):
     while True:
         # load source vol and seg
         src_vol, src_seg = next(gen)
+        
         src_seg = split_seg(src_seg)
-
+        
         # load target vol and seg (if not provided by atlas)
         if not atlas_file:
             trg_vol, trg_seg = next(gen)
@@ -188,7 +192,59 @@ def semisupervised(vol_names, seg_names, labels, atlas_file=None, downsize=2):
         if zeros is None:
             shape = src_vol.shape[1:-1]
             zeros = np.zeros((1, *shape, len(shape)))
+        
+        invols = [src_vol, trg_vol, src_seg]
+        outvols = [trg_vol, zeros, trg_seg]
+        yield (invols, outvols)
 
+def semisupervised_2d(vol_names, seg_names, labels, atlas_file=None, downsize=1):
+    """
+    Generator for semi-supervised registration training using ground truth segmentations.
+    Scan-to-atlas training can be enabled by providing the atlas_file argument. 
+
+    Parameters:
+        vol_names: List of volume files to load, or list of preloaded volumes.
+        seg_names: List of corresponding seg files to load, or list of preloaded volumes.
+        labels: Array of discrete label values to use in training.
+        atlas_file: Atlas npz file for scan-to-atlas training. Default is None.
+        downsize: Downsize factor for segmentations. Default is 2.
+    """
+    # configure base generator
+    gen = volgen(vol_names, segs=seg_names, np_var='vol')
+    zeros = None
+
+    # internal utility to generate downsampled prob seg from discrete seg
+    def split_seg(seg):
+        prob_seg = np.zeros((*seg.shape[:3], len(labels)))
+        
+        for i, label in enumerate(labels):
+            prob_seg[0, ..., i] = seg[0, ..., 0] == label
+        return prob_seg[:, ::downsize, ::downsize, :]
+
+    # cache target vols and segs if atlas is supplied
+    if atlas_file:
+        trg_vol = py.utils.load_volfile(atlas_file, np_var='vol',
+                                        add_batch_axis=True, add_feat_axis=True)
+        trg_seg = py.utils.load_volfile(atlas_file, np_var='seg',
+                                        add_batch_axis=True, add_feat_axis=True)
+        trg_seg = split_seg(trg_seg)
+
+    while True:
+        # load source vol and seg
+        src_vol, src_seg = next(gen)
+        
+        src_seg = split_seg(src_seg)
+        
+        # load target vol and seg (if not provided by atlas)
+        if not atlas_file:
+            trg_vol, trg_seg = next(gen)
+            trg_seg = split_seg(trg_seg)
+
+        # cache zeros
+        if zeros is None:
+            shape = src_vol.shape[1:-1]
+            zeros = np.zeros((1, *shape, len(shape)))
+        
         invols = [src_vol, trg_vol, src_seg]
         outvols = [trg_vol, zeros, trg_seg]
         yield (invols, outvols)
