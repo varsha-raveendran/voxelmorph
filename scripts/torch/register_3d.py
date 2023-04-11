@@ -44,11 +44,13 @@ import nibabel as nib
 import torch
 from eval_metrics import EvaluationMetrics
 
+
 # import voxelmorph with pytorch backend
 os.environ['NEURITE_BACKEND'] = 'pytorch'
 os.environ['VXM_BACKEND'] = 'pytorch'
 import voxelmorph as vxm   # nopep8
 import torchio as tio
+from torch.utils.data import DataLoader
 
 # parse commandline args
 parser = argparse.ArgumentParser()
@@ -72,13 +74,21 @@ else:
 
 # load moving and fixed images
 add_feat_axis = not args.multichannel
-moving = vxm.py.utils.load_volfile(args.moving, add_batch_axis=True, add_feat_axis=add_feat_axis)
-fixed, fixed_affine = vxm.py.utils.load_volfile(
-    args.fixed, add_batch_axis=True, add_feat_axis=add_feat_axis, ret_affine=True)
 
-rescale = tio.RescaleIntensity(out_min_max=(0, 1))
-transforms = [rescale]
-transform = tio.Compose(transforms)
+test_dataset =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", "NLST_dataset_train_test.json",
+                                downsampled=False, masked=False,
+                            train_transform=True, is_norm=True, train=False)
+
+val_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
+
+
+# moving = vxm.py.utils.load_volfile(args.moving, add_batch_axis=True, add_feat_axis=add_feat_axis)
+# fixed, fixed_affine = vxm.py.utils.load_volfile(
+#     args.fixed, add_batch_axis=True, add_feat_axis=add_feat_axis, ret_affine=True)
+
+# rescale = tio.RescaleIntensity(out_min_max=(0, 1))
+# transforms = [rescale]
+# transform = tio.Compose(transforms)
 
 
 # load and set up model
@@ -86,30 +96,33 @@ model = vxm.networks.VxmDense.load(args.model, device)
 model.to(device)
 model.eval()
 
-# set up tensors and permute
-input_moving = torch.from_numpy(moving).to(device).float().permute(0, 4, 1, 2, 3)
-input_fixed = torch.from_numpy(fixed).to(device).float().permute(0, 4, 1, 2, 3)
-breakpoint()
+fixed_affine = None
+for batch_idx, batch in enumerate(val_dataloader):
+    
+    # # set up tensors and permute
+    # input_moving = torch.from_numpy(moving).to(device).float().permute(0, 4, 1, 2, 3)
+    # input_fixed = torch.from_numpy(fixed).to(device).float().permute(0, 4, 1, 2, 3)
+    # input_moving =  transform(input_moving.squeeze(0))
+    # input_fixed =  transform(input_fixed.squeeze(0))
 
-input_moving =  transform(input_moving.squeeze(0))
-input_fixed =  transform(input_fixed.squeeze(0))
+    input_fixed = batch["fixed_img"].to(device)
+    input_moving = batch["moving_img"].to(device)
+    zero_ff = batch["zero_flow_field"].to(device)
 
+    # predict
+    moved, warp = model(input_moving.unsqueeze(0), input_fixed.unsqueeze(0), registration=True)
 
+    print(torch.max(moved))
+    print(torch.min(moved))
+    print(torch.max(warp))
+    print(torch.min(warp))
 
-# predict
-moved, warp = model(input_moving.unsqueeze(0), input_fixed.unsqueeze(0), registration=True)
+    # save moved image
+    if args.moved:
+        moved = moved.detach().cpu().numpy().squeeze()
+        vxm.py.utils.save_volfile(moved, args.moved, fixed_affine)
 
-print(torch.max(moved))
-print(torch.min(moved))
-print(torch.max(warp))
-print(torch.min(warp))
-
-# save moved image
-if args.moved:
-    moved = moved.detach().cpu().numpy().squeeze()
-    vxm.py.utils.save_volfile(moved, args.moved, fixed_affine)
-
-# save warp
-if args.warp:
-    warp = warp.detach().cpu().numpy().squeeze()
-    vxm.py.utils.save_volfile(warp, args.warp, fixed_affine)
+    # save warp
+    if args.warp:
+        warp = warp.detach().cpu().numpy().squeeze()
+        vxm.py.utils.save_volfile(warp, args.warp, fixed_affine)

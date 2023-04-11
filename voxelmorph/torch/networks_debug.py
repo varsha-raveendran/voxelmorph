@@ -279,7 +279,7 @@ class VxmDense(LoadableModel):
         # warp image with flow field
         y_source = self.transformer(source, pos_flow)
         y_target = self.transformer(target, neg_flow) if self.bidir else None
-        
+        breakpoint()
         # return non-integrated flow field if training
         if not registration:
             return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow)

@@ -55,109 +55,6 @@ import monai
 import wandb
 
 wandb.init(project="Vxm")
-# def image_norm(img):
-#     max_v = np.max(img)
-#     min_v = np.min(img)
-
-#     norm_img = (img - min_v) / (max_v - min_v)
-#     return norm_img
-
-class NLST(torch.utils.data.Dataset):
-    def __init__(self, root_dir, json_conf='dataset.json', masked=False, downsampled=False, train_transform = False, train=True, is_norm=False):
-       
-        self.root_dir = root_dir
-        self.image_dir = os.path.join(root_dir,'imagesTr')
-        self.keypoint_dir = os.path.join(root_dir,'keypointsTr')
-        self.masked = masked
-        with open(os.path.join(root_dir,json_conf)) as f:
-            self.dataset_json = json.load(f)
-        self.shape = self.dataset_json['tensorImageShape']['0']
-        self.H, self.W, self.D = self.shape
-        self.downsampled = downsampled
-        self.train = train
-        #self.transforms = transforms.Resize((192, 192))
-        rescale = tio.RescaleIntensity(out_min_max=(0, 1))
-        transforms = [rescale]
-        self.transform = tio.Compose(transforms)
-        self.is_norm = False
-        if self.train :
-            self.type_data = 'training_paired_images'
-        
-        else:
-            self.type_data = 'registration_val'
-        
-    def __len__(self):
-        
-        if self.train:
-            return self.dataset_json['numPairedTraining']
-        else:
-            return len(self.dataset_json['registration_val'])
-
-    def get_shape(self):
-        if self.downsampled:
-            return [x//2 for x in self.shape]
-        else:
-            return self.shape
-    
-    def __getitem__(self, idx):
-        fix_idx = self.dataset_json[self.type_data][idx]['fixed']
-        mov_idx = self.dataset_json[self.type_data][idx]['moving']
-        
-        fix_path=os.path.join(self.root_dir,fix_idx)
-        
-        mov_path=os.path.join(self.root_dir,mov_idx)
-        fixed_img = nib.load(fix_path).get_fdata()
-        moving_img = nib.load(mov_path).get_fdata()
-    
-        # if self.is_norm:
-        #     fixed_img = image_norm(fixed_img)
-        #     moving_img = image_norm(moving_img)
-
-        
-        fixed_img=torch.from_numpy(fixed_img).float()
-        moving_img=torch.from_numpy(moving_img).float()
-        
-        
-        fixed_mask=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata()).float()
-        moving_mask=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata()).float()
-        
-        
-        # fixed_kp=torch.from_numpy(np.genfromtxt(fix_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=','))
-        # moving_kp=torch.from_numpy(np.genfromtxt(mov_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=','))
-        # fixed_kp=(fixed_kp.flip(-1)/torch.tensor(self.shape))*2-1
-        # moving_kp=(moving_kp.flip(-1)/torch.tensor(self.shape))*2-1
-
-        if self.masked:
-            #fixed_img=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata())*fixed_img
-            fixed_img = fixed_img * fixed_mask
-            moving_img = moving_img * moving_mask
-            #moving_img=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata())*moving_img
-        
-        # if self.downsampled:
-        #     fixed_img=F.interpolate(fixed_img.view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='trilinear').squeeze()
-        #     moving_img=F.interpolate(moving_img.view(1,1,self.H,self.W,self.D), size=(self.H//2,self.W//2,self.D//2), mode='trilinear').squeeze()
-        #     if self.masked:
-        #         fixed_img*=F.interpolate(torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata()).view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='nearest').squeeze()
-        #         moving_img*=F.interpolate(torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata()).view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='nearest').squeeze()
-
-     
-        if self.transform is not None:
-            fixed_img = self.transform(fixed_img.float().unsqueeze(0))
-            moving_img = self.transform(moving_img.float().unsqueeze(0))
-       
-        
-        shape = fixed_img.shape[1:-1]
-        
-        zeros = torch.zeros((1, *shape, len(shape)))
-        
-        return { "fixed_name" : fix_idx,
-                "moving_name" : mov_idx,
-                "fixed_img" : fixed_img, 
-                "moving_img" : moving_img, 
-                "fixed_mask" : fixed_mask.unsqueeze(0), 
-                "moving_mask" : moving_mask.unsqueeze(0),
-                "zero_flow_field" : zeros}
-        
 # parse the commandline
 parser = argparse.ArgumentParser()
 
@@ -174,14 +71,14 @@ parser.add_argument('--multichannel', action='store_true',
 # training parameters
 parser.add_argument('--gpu', default='0', help='GPU ID number(s), comma-separated (default: 0)')
 parser.add_argument('--batch-size', type=int, default=1, help='batch size (default: 1)')
-parser.add_argument('--epochs', type=int, default=1000,
+parser.add_argument('--epochs', type=int, default=200,
                     help='number of training epochs (default: 1500)')
-parser.add_argument('--steps-per-epoch', type=int, default=150,
+parser.add_argument('--steps-per-epoch', type=int, default=15,
                     help='frequency of model saves (default: 100)')
 parser.add_argument('--load-model', help='optional model file to initialize with')
 parser.add_argument('--initial-epoch', type=int, default=0,
                     help='initial epoch number (default: 0)')
-parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+parser.add_argument('--lr', type=float, default=5e-4, help='learning rate (default: 1e-4)')
 parser.add_argument('--cudnn-nondet', action='store_true',
                     help='disable cudnn determinism - might slow down training')
 
@@ -199,41 +96,18 @@ parser.add_argument('--bidir', action='store_true', help='enable bidirectional c
 # loss hyperparameters
 parser.add_argument('--image-loss', default='ncc',
                     help='image reconstruction loss - can be mse or ncc (default: mse)')
-parser.add_argument('--lambda', type=float, dest='weight', default=1,
+parser.add_argument('--lambda', type=float, dest='weight', default=0,
                     help='weight of deformation loss (default: 0.01)')
 args = parser.parse_args()
 
 bidir = args.bidir
-print(bidir)
-# load and prepare training data
-# train_files = vxm.py.utils.read_file_list(args.img_list, prefix=args.img_prefix,
-#                                           suffix=args.img_suffix)
-# assert len(train_files) > 0, 'Could not find any training data.'
 
-# no need to append an extra feature axis if data is multichannel
-# add_feat_axis = not args.multichannel
-
-# if args.atlas:
-#     # scan-to-atlas generator
-#     atlas = vxm.py.utils.load_volfile(args.atlas, np_var='vol',
-#                                       add_batch_axis=True, add_feat_axis=add_feat_axis)
-#     generator = vxm.generators.scan_to_atlas(train_files, atlas,
-#                                              batch_size=args.batch_size, bidir=args.bidir,
-#                                              add_feat_axis=add_feat_axis)
-# else:
-#     # scan-to-scan generator
-#     generator = vxm.generators.scan_to_scan(
-#         train_files, batch_size=args.batch_size, bidir=args.bidir, add_feat_axis=add_feat_axis)
-
-# extract shape from sampled input
-# inshape = next(generator)[0][0].shape[1:-1]
-
-train_dataset =  NLST("/vol/pluto/users/raveendr/data/NLST/", "NLST_dataset_train_test.json",
+train_dataset =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", "NLST_dataset_train_test.json",
                                 downsampled=False, 
-                                masked=True,
+                                masked=False,
                             train_transform=True, is_norm=True)
         
-train_set_size = int(len(train_dataset) * 0.8)
+train_set_size = int(len(train_dataset) * 0.9)
 
 valid_set_size = len(train_dataset) - train_set_size
 print("train_set_size: ", train_set_size)
@@ -241,11 +115,13 @@ print("valid_set_size: ", valid_set_size)
 
 # split the train set into two
 seed = torch.Generator().manual_seed(42)
-train_set, valid_set = data.random_split(train_dataset, [train_set_size, valid_set_size], generator=seed)
+train_set, valid_set = data.random_split(train_dataset, [train_set_size, valid_set_size], 
+                                         generator=seed)
 
+# overfit_set = torch.utils.data.Subset(train_set, [2])
 
-train_dataloader = DataLoader(train_set, batch_size=1, shuffle=True)
-val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False)
+train_dataloader = DataLoader(train_set, batch_size=1, shuffle=True, num_workers=4)
+val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4)
 
 # prepare model folder
 model_dir = args.model_dir
@@ -293,7 +169,7 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 
 # prepare image loss
 if args.image_loss == 'ncc':
-    image_loss_func = vxm.losses.NCC().loss
+    image_loss_func = vxm.losses.NCC().loss 
     # image_loss_func = monai.losses.LocalNormalizedCrossCorrelationLoss(
     #     spatial_dims=3,
     #     kernel_size=3,
@@ -314,8 +190,8 @@ else:
     weights = [1]
 
 # prepare deformation loss
-losses += [vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss]
-weights += [1]
+# losses += [vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss]
+# weights += [args.weight]
 
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
@@ -330,8 +206,6 @@ for epoch in range(args.initial_epoch, args.epochs):
 
     # for step in range(args.steps_per_epoch):
     for batch_idx, batch in enumerate(train_dataloader):
-        
-
         fixed_img = batch["fixed_img"].to(device)
         moving_img = batch["moving_img"].to(device)
         zero_ff = batch["zero_flow_field"].to(device)
@@ -363,7 +237,7 @@ for epoch in range(args.initial_epoch, args.epochs):
             
 
         epoch_loss.append(loss_list)
-        epoch_total_loss.append(loss.item())
+        epoch_total_loss.append(loss.detach().item())
         wandb.log({"train/loss": loss.detach().item()})
         # backpropagate and optimize
         optimizer.zero_grad()
@@ -397,21 +271,22 @@ for epoch in range(args.initial_epoch, args.epochs):
                 val_loss += curr_loss
             
 
-        val_epoch_loss.append(val_loss_list)
-        val_epoch_total_loss.append(val_loss.item())
-        wandb.log({"val/loss": val_loss.detach().item()})
+            val_epoch_loss.append(val_loss_list)
+            val_epoch_total_loss.append(val_loss.item())
+            wandb.log({"val/loss": val_loss.detach().item()})
             
     # print epoch info
     epoch_info = 'Epoch %d/%d' % (epoch + 1, args.epochs)
+    # wandb.log({"train/epoch": epoch + 1})
     time_info = '%.4f sec/step' % np.mean(epoch_step_time)
     losses_info = ', '.join(['%.4e' % f for f in np.mean(epoch_loss, axis=0)])
     loss_info = 'train_loss: %.4e  (%s)' % (np.mean(epoch_total_loss), losses_info)
     
-    val_losses_info = ', '.join(['%.4e' % f for f in np.mean(val_epoch_loss, axis=0)])
-    val_loss_info = 'val_loss: %.4e  (%s)' % (np.mean(val_epoch_total_loss), val_losses_info)
+    # val_losses_info = ', '.join(['%.4e' % f for f in np.mean(val_epoch_loss, axis=0)])
+    # val_loss_info = 'val_loss: %.4e  (%s)' % (np.mean(val_epoch_total_loss), val_losses_info)
     
-    print(' - '.join((epoch_info, time_info, loss_info, val_loss_info)), flush=True)
-    wandb.log({"train/epoch_loss": np.mean(epoch_total_loss)})
-    wandb.log({"val/epoch_loss": np.mean(val_epoch_total_loss)})
+    print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
+    wandb.log({"train/epoch_loss": np.mean(epoch_total_loss), 'epoch': epoch + 1})
+    wandb.log({"val/epoch_loss": np.mean(val_epoch_total_loss), 'epoch': epoch + 1})
 # final model save
 model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))
