@@ -8,6 +8,7 @@ import pytorch_lightning as pl
 from typing import Optional
 import numpy as np
 import nibabel as nib
+import torchio as tio
 
 def image_norm(img):
     max_v = np.max(img)
@@ -75,11 +76,8 @@ class NLSTDataModule(pl.LightningDataModule):
 
 # Ref: https://github.com/MDL-UzL/L2R/blob/main/examples/task_specific/NLST/Example_NLST.ipynb
 class NLST(torch.utils.data.Dataset):
-    def __init__(self, root_dir, json_conf='dataset.json', masked=False, downsampled=False, train_transform = False, train=True, is_norm=False):
-        """
-        NLST_Dataset
-        Provides FIXED_IMG, MOVING_IMG, FIXED_KEYPOINTS, MOVING_KEYPOINTS
-        """
+    def __init__(self, root_dir, json_conf='NLST_dataset.json', masked=False, downsampled=False, train_transform = False, train=True, is_norm=False):
+       
         self.root_dir = root_dir
         self.image_dir = os.path.join(root_dir,'imagesTr')
         self.keypoint_dir = os.path.join(root_dir,'keypointsTr')
@@ -90,9 +88,23 @@ class NLST(torch.utils.data.Dataset):
         self.H, self.W, self.D = self.shape
         self.downsampled = downsampled
         self.train = train
-        #self.transforms = transforms.Resize((192, 192))
-        self.transforms = None
-        self.is_norm = is_norm
+        
+#         rescale = tio.RescaleIntensity(out_min_max=(0, 1))
+
+        rescale = tio.RescaleIntensity(percentiles=(0.5, 99.5))
+        transforms = [rescale]
+        # self.transform = tio.Compose(transforms)
+
+        HOUNSFIELD_AIR, HOUNSFIELD_BONE = -1000, 1000
+        clamp = tio.Clamp(out_min=HOUNSFIELD_AIR, out_max=HOUNSFIELD_BONE)
+
+        
+        self.preprocess_intensity = tio.Compose([
+        clamp,
+        rescale,
+        ])
+
+        self.is_norm = False
         if self.train :
             self.type_data = 'training_paired_images'
         
@@ -122,56 +134,47 @@ class NLST(torch.utils.data.Dataset):
         fixed_img = nib.load(fix_path).get_fdata()
         moving_img = nib.load(mov_path).get_fdata()
     
-        if self.is_norm:
-            fixed_img = image_norm(fixed_img)
-            moving_img = image_norm(moving_img)
+        # if self.is_norm:
+        #     fixed_img = image_norm(fixed_img)
+        #     moving_img = image_norm(moving_img)
 
         
         fixed_img=torch.from_numpy(fixed_img).float()
         moving_img=torch.from_numpy(moving_img).float()
-        
+        fixed_img = fixed_img.unsqueeze(0)
+        moving_img = moving_img.unsqueeze(0)
         
         fixed_mask=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata()).float()
+        fixed_mask = fixed_mask.unsqueeze(0)
         moving_mask=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata()).float()
-        
-        
-        # fixed_kp=torch.from_numpy(np.genfromtxt(fix_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=','))
-        # moving_kp=torch.from_numpy(np.genfromtxt(mov_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=','))
-        # fixed_kp=(fixed_kp.flip(-1)/torch.tensor(self.shape))*2-1
-        # moving_kp=(moving_kp.flip(-1)/torch.tensor(self.shape))*2-1
-
+        moving_mask = moving_mask.unsqueeze(0)
+     
+#         if self.transform is not None:
+#             fixed_img = self.transform(fixed_img)
+#             moving_img = self.transform(moving_img)
+# #             fixed_img = torch.from_numpy(image_norm(fixed_img.numpy())).unsqueeze(0)
+# #             moving_img = torch.from_numpy(image_norm(moving_img.numpy())).unsqueeze(0)
+       
+        if self.preprocess_intensity is not None:
+            fixed_img = self.preprocess_intensity(fixed_img)
+            moving_img = self.preprocess_intensity(moving_img)
+            
         if self.masked:
-            #fixed_img=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata())*fixed_img
             fixed_img = fixed_img * fixed_mask
             moving_img = moving_img * moving_mask
-            #moving_img=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata())*moving_img
-        
-        # if self.downsampled:
-        #     fixed_img=F.interpolate(fixed_img.view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='trilinear').squeeze()
-        #     moving_img=F.interpolate(moving_img.view(1,1,self.H,self.W,self.D), size=(self.H//2,self.W//2,self.D//2), mode='trilinear').squeeze()
-        #     if self.masked:
-        #         fixed_img*=F.interpolate(torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata()).view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='nearest').squeeze()
-        #         moving_img*=F.interpolate(torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata()).view(1,1,self.H,self.W,self.D),size=(self.H//2,self.W//2,self.D//2),mode='nearest').squeeze()
 
-     
-        if self.transforms is not None:
-            fixed_img = self.transforms(fixed_img)
-            moving_img = self.transforms(moving_img)
-            fixed_mask = self.transforms(fixed_mask)
-            moving_mask = self.transforms(moving_mask)        
         
-        shape = fixed_img.unsqueeze(0).shape[1:-1]
+        shape = fixed_img.shape[1:-1]
         
         zeros = torch.zeros((1, *shape, len(shape)))
         
         return { "fixed_name" : fix_idx,
                 "moving_name" : mov_idx,
-                "fixed_img" : fixed_img.float().unsqueeze(0), 
-                "moving_img" : moving_img.float().unsqueeze(0), 
-                "fixed_mask" : fixed_mask.unsqueeze(0), 
-                "moving_mask" : moving_mask.unsqueeze(0),
+                "fixed_img" : fixed_img, 
+                "moving_img" : moving_img, 
+                "fixed_mask" : fixed_mask, 
+                "moving_mask" : moving_mask,
                 "zero_flow_field" : zeros}
-
 
 class RandomDataModule(pl.LightningDataModule):
     """

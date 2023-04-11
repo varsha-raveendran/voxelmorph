@@ -74,6 +74,57 @@ class NCC_cpu:
         cc = (cross / I_var) * (cross / J_var)
         
         return -torch.mean(cc)
+    
+class NCC_2(torch.nn.Module):
+    """
+    local (over window) normalized cross correlation
+    """
+    def __init__(self, win=5, eps=1e-8):
+        super(NCC_2, self).__init__()
+        self.win = win
+        self.eps = eps
+        self.w_temp = win
+
+    def forward(self, I, J):
+        ndims = 3
+        win_size = self.w_temp
+
+        # set window size
+        if self.win is None:
+            self.win = [5] * ndims
+        else:
+            self.win = [self.w_temp] * ndims
+
+        weight_win_size = self.w_temp
+        weight = torch.ones((1, 1, weight_win_size, weight_win_size, weight_win_size), device=I.device, requires_grad=False)
+        conv_fn = F.conv3d
+
+        # compute CC squares
+        I2 = I*I
+        J2 = J*J
+        IJ = I*J
+
+        # compute filters
+        # compute local sums via convolution
+        I_sum = conv_fn(I, weight, padding=int(win_size/2))
+        J_sum = conv_fn(J, weight, padding=int(win_size/2))
+        I2_sum = conv_fn(I2, weight, padding=int(win_size/2))
+        J2_sum = conv_fn(J2, weight, padding=int(win_size/2))
+        IJ_sum = conv_fn(IJ, weight, padding=int(win_size/2))
+
+        # compute cross correlation
+        win_size = np.prod(self.win)
+        u_I = I_sum/win_size
+        u_J = J_sum/win_size
+
+        cross = IJ_sum - u_J*I_sum - u_I*J_sum + u_I*u_J*win_size
+        I_var = I2_sum - 2 * u_I * I_sum + u_I*u_I*win_size
+        J_var = J2_sum - 2 * u_J * J_sum + u_J*u_J*win_size
+
+        cc = cross * cross / (I_var * J_var + self.eps)
+
+        # return negative cc.
+        return -1.0 * torch.mean(cc)
 
 class NCC:
     """
@@ -127,22 +178,22 @@ class NCC:
         IJ_sum = conv_fn(IJ, sum_filt, stride=stride, padding=padding)
 
         win_size = np.prod(win)
-        # u_I = I_sum / win_size
-        # u_J = J_sum / win_size
+        u_I = I_sum / win_size
+        u_J = J_sum / win_size
 
-        # cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
-        # I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
-        # J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
+        cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
+        I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
+        J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
 
-        # cc = cross * cross / (I_var * J_var + 1e-5)
+        cc = cross * cross / (I_var * J_var + 1e-5)
         
-        cross = IJ_sum - I_sum * J_sum / win_size
-        cross = torch.clamp(cross, min=self.eps)
-        I_var = I2_sum - I_sum * I_sum / win_size
-        I_var = torch.clamp(I_var, min=self.eps)
-        J_var = J2_sum - J_sum * J_sum / win_size
-        J_var = torch.clamp(J_var, min=self.eps)
-        cc = (cross / I_var) * (cross / J_var)
+        # cross = IJ_sum - I_sum * J_sum / win_size
+        # cross = torch.clamp(cross, min=self.eps)
+        # I_var = I2_sum - I_sum * I_sum / win_size
+        # I_var = torch.clamp(I_var, min=self.eps)
+        # J_var = J2_sum - J_sum * J_sum / win_size
+        # J_var = torch.clamp(J_var, min=self.eps)
+        # cc = (cross / I_var) * (cross / J_var)
         
         return -torch.mean(cc)
 
