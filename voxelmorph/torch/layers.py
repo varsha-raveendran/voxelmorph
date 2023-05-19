@@ -29,6 +29,11 @@ class SpatialTransformer(nn.Module):
 
     def forward(self, src, flow):
         # new locations
+        # Ref: https://github.com/pytorch/pytorch/issues/24870
+        # It's probably best to first transform/create a grid in world coordinates (opposed to [-1, 1] space), 
+        # then add your displacement field and then normalize the added result to obtain a [-1, 1] input 
+        # required for F.grid_sample.
+        
         new_locs = self.grid + flow
         shape = flow.shape[2:]
 
@@ -44,7 +49,6 @@ class SpatialTransformer(nn.Module):
         elif len(shape) == 3:
             new_locs = new_locs.permute(0, 2, 3, 4, 1)
             new_locs = new_locs[..., [2, 1, 0]]
-
         return nnf.grid_sample(src, new_locs, align_corners=True, mode=self.mode)
 
 

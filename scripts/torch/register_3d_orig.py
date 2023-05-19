@@ -112,28 +112,32 @@ else:
 # load moving and fixed images
 add_feat_axis = not args.multichannel
 
+def image_norm(img):
+    max_v = np.max(img)
+    min_v = np.min(img)
 
-moving = vxm.py.utils.load_volfile(args.moving, add_batch_axis=True, add_feat_axis=add_feat_axis)
+    norm_img = (img - min_v) / (max_v - min_v)
+    return norm_img
+
+moving = vxm.py.utils.load_volfile(args.moving, add_batch_axis=False, add_feat_axis=add_feat_axis)
 fixed, fixed_affine = vxm.py.utils.load_volfile(
-    args.fixed, add_batch_axis=True, add_feat_axis=add_feat_axis, ret_affine=True)
+    args.fixed, add_batch_axis=False, add_feat_axis=add_feat_axis, ret_affine=True)
 
-moving_mask = vxm.py.utils.load_volfile(args.moving_mask, add_batch_axis=True, add_feat_axis=add_feat_axis)
+moving_mask = vxm.py.utils.load_volfile(args.moving_mask, add_batch_axis=False, add_feat_axis=add_feat_axis)
 fixed_mask, fixed_affine = vxm.py.utils.load_volfile(
-    args.fixed_mask, add_batch_axis=True, add_feat_axis=add_feat_axis, ret_affine=True)
+    args.fixed_mask, add_batch_axis=False, add_feat_axis=add_feat_axis, ret_affine=True)
 
 # rescale = tio.RescaleIntensity(out_min_max=(0, 1))
 # transforms = [rescale]
 # transform = tio.Compose(transforms)
 
 rescale = tio.RescaleIntensity(percentiles=(0.5, 99.5))
-transforms = [rescale]
 
-HOUNSFIELD_AIR, HOUNSFIELD_BONE = -1000, 1000
-clamp = tio.Clamp(out_min=HOUNSFIELD_AIR, out_max=HOUNSFIELD_BONE)
+# HOUNSFIELD_AIR, HOUNSFIELD_BONE = -1000, 1000
+# clamp = tio.Clamp(out_min=HOUNSFIELD_AIR, out_max=HOUNSFIELD_BONE)
 
 
 preprocess_intensity = tio.Compose([
-clamp,
 rescale,
 ])
 
@@ -147,20 +151,36 @@ model.eval()
 
 # set up tensors and permute
 #shape of moving: (1, 224, 192, 224, 1)
-input_moving = torch.from_numpy(moving).to(device).float().permute(0, 4, 1, 2, 3)
-input_fixed = torch.from_numpy(fixed).to(device).float().permute(0, 4, 1, 2, 3)
+# input_moving = torch.from_numpy(moving).to(device).float().permute(0, 4, 1, 2, 3)
+# input_fixed = torch.from_numpy(fixed).to(device).float().permute(0, 4, 1, 2, 3)
 
-moving_mask = torch.from_numpy(moving_mask).to(device).permute(0, 4, 1, 2, 3)
-fixed_mask = torch.from_numpy(fixed_mask).to(device).permute(0, 4, 1, 2, 3)
+# moving_mask = torch.from_numpy(moving_mask).to(device).permute(0, 4, 1, 2, 3)
+# fixed_mask = torch.from_numpy(fixed_mask).to(device).permute(0, 4, 1, 2, 3)
+print(moving.shape)
 
-input_moving =  preprocess_intensity(input_moving.squeeze(0))
-input_fixed =  preprocess_intensity(input_fixed.squeeze(0))
+input_fixed = image_norm(fixed)
+input_moving = image_norm(moving)
 
+input_moving = torch.from_numpy(input_moving).to(device).float().permute(3,0, 1, 2)
+input_fixed = torch.from_numpy(input_fixed).to(device).float().permute(3,0, 1, 2)
+
+moving_mask = torch.from_numpy(moving_mask).to(device).permute(3,0, 1, 2)
+fixed_mask = torch.from_numpy(fixed_mask).to(device).permute(3,0, 1, 2)
+
+
+
+
+# input_moving =  preprocess_intensity(input_moving)
+# input_fixed =  preprocess_intensity(input_fixed)
+print(torch.max(input_moving))
+print(torch.min(input_moving))
+print(torch.max(input_fixed))
+print(torch.min(input_fixed))
 input_moving = input_moving.unsqueeze(0)
 input_fixed = input_fixed.unsqueeze(0)
 
-input_moving = input_moving * moving_mask
-input_fixed = input_fixed * fixed_mask
+# input_moving = input_moving * moving_mask
+# input_fixed = input_fixed * fixed_mask
 
 # predict
 moved, warp = model(input_moving, input_fixed, registration=True)
@@ -176,6 +196,7 @@ print(f"number of folds: {(det<=0).sum()}")
 # save moved image
 if args.moved:
     moved = moved.detach().cpu().numpy().squeeze()
+    
     vxm.py.utils.save_volfile(moved, args.moved, fixed_affine)
 
 # save warp

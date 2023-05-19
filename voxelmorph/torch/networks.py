@@ -240,6 +240,7 @@ class VxmDense(LoadableModel):
 
         # configure transformer
         self.transformer = layers.SpatialTransformer(inshape)
+        
 
     def forward(self, source, target, registration=False):
         '''
@@ -252,10 +253,8 @@ class VxmDense(LoadableModel):
         # concatenate inputs and propagate unet
         x = torch.cat([source, target], dim=1)
         x = self.unet_model(x)
-        breakpoint()
         # transform into flow field
         flow_field = self.flow(x)
-        breakpoint()
         # resize flow for integration
         pos_flow = flow_field
         if self.resize:
@@ -282,7 +281,8 @@ class VxmDense(LoadableModel):
         
         # return non-integrated flow field if training
         if not registration:
-            return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow)
+            
+            return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow, pos_flow)
         else:
             return y_source, pos_flow
 

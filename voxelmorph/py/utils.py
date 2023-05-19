@@ -138,6 +138,7 @@ def save_volfile(array, filename, affine=None):
     if filename.endswith(('.nii', '.nii.gz')):
         import nibabel as nib
         if affine is None and array.ndim >= 3:
+            
             # use LIA transform as default affine
             affine = np.array([[-1, 0, 0, 0],  # nopep8
                                [0, 0, 1, 0],  # nopep8

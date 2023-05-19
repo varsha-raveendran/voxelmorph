@@ -109,11 +109,8 @@ json_file_name = args.data_json
 train_dataset =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", json_file_name,
                                 downsampled=False, 
                                 masked=True,
-                             is_norm=True)
-valid_set =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", json_file_name,
-                                downsampled=False, 
-                                masked=False,train=False,
-                             is_norm=True)
+                            train_transform=True, is_norm=True)
+        
 # train_set_size = int(len(train_dataset) * 0.9)
 
 # valid_set_size = len(train_dataset) - train_set_size
@@ -128,7 +125,7 @@ seed = torch.Generator().manual_seed(42)
 # overfit_set = torch.utils.data.Subset(train_set, [2])
 
 train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=4)
-val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4)
+# val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4)
 
 # prepare model folder
 model_dir = args.model_dir
@@ -177,7 +174,12 @@ optimizer = torch.optim.Adam(model.parameters(), lr=args.lr)
 # prepare image loss
 if args.image_loss == 'ncc':
     image_loss_func = vxm.losses.NCC().loss 
-
+    # image_loss_func = monai.losses.LocalNormalizedCrossCorrelationLoss(
+    #     spatial_dims=3,
+    #     kernel_size=3,
+    #     kernel_type='rectangular',
+    #     reduction="mean", smooth_nr=0.0, smooth_dr=1e-6
+    # )
 elif args.image_loss == 'mse':
     image_loss_func = vxm.losses.MSE().loss
 else:
@@ -194,10 +196,16 @@ else:
 # prepare deformation loss
 losses += [vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss]
 weights += [args.weight]
-best_validation_loss = float("inf")
+
+dice_loss = vxm.losses.Dice().loss
+warp_nearest = monai.networks.blocks.Warp(mode="nearest", padding_mode="border")
+
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
-    model.train()    
+    model.train()
+    # save model checkpoint
+    if epoch % 20 == 0:
+        model.save(os.path.join(model_dir, '%04d.pt' % epoch))
 
     epoch_loss = []
     epoch_total_loss = []
@@ -226,54 +234,62 @@ for epoch in range(args.initial_epoch, args.epochs):
                 
             loss_list.append(curr_loss.item())
             loss += curr_loss
+            
 
+        warped_seg = warp_nearest(moving_mask, y_pred[2])
+        
+        val_outputs = torch.nn.functional.one_hot(warped_seg.squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)
+        
+        val_labels = torch.nn.functional.one_hot(fixed_mask.squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)        
+        
+        dice_loss_val = dice_loss(val_labels, val_outputs)
+        loss += (dice_loss_val * 0.1)
+        
+        breakpoint()
+        
+        loss_list.append(dice_loss_val.item())
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.detach().item())
         wandb.log({"train/loss": loss.detach().item()})
-        
+        wandb.log({"train/dice_loss": dice_loss_val.detach().item()})
         # backpropagate and optimize
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        
+        del warped_seg
+        del val_labels
+        del val_outputs
         # get compute time
         epoch_step_time.append(time.time() - step_start_time)
 
-    model.eval()
-    with torch.no_grad():
-        val_epoch_loss = []
-        val_epoch_total_loss = []
-        for batch_idx, batch in enumerate(val_dataloader):
-            fixed_img = batch["fixed_img"].to(device)
-            moving_img = batch["moving_img"].to(device)
-            zero_ff = batch["zero_flow_field"].to(device)
-            y_pred = model(moving_img, fixed_img) 
-            y_true = (fixed_img, zero_ff ) 
+    # model.eval()
+    # with torch.no_grad():
+    #     val_epoch_loss = []
+    #     val_epoch_total_loss = []
+    #     for batch_idx, batch in enumerate(val_dataloader):
+    #         fixed_img = batch["fixed_img"].to(device)
+    #         moving_img = batch["moving_img"].to(device)
+    #         zero_ff = batch["zero_flow_field"].to(device)
+    #         y_pred = model(moving_img, fixed_img) 
+    #         y_true = (fixed_img, zero_ff ) 
 
-            # calculate total loss
-            val_loss = 0
-            val_loss_list = []
-            for n, loss_function in enumerate(losses):
+    #         # calculate total loss
+    #         val_loss = 0
+    #         val_loss_list = []
+    #         for n, loss_function in enumerate(losses):
                 
-                curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
-                if math.isnan(curr_loss) == True:
-                    breakpoint()
+    #             curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
+    #             if math.isnan(curr_loss) == True:
+    #                 breakpoint()
                     
-                val_loss_list.append(curr_loss.item())
-                val_loss += curr_loss
+    #             val_loss_list.append(curr_loss.item())
+    #             val_loss += curr_loss
             
 
-            val_epoch_loss.append(val_loss_list)
-            val_epoch_total_loss.append(val_loss.item())
-            wandb.log({"val/loss": val_loss.detach().item()})
-        # save model checkpoint
-    if np.mean(val_epoch_total_loss) < best_validation_loss:
-        best_validation_loss = np.mean(val_epoch_total_loss)
-        model.save(os.path.join(model_dir, '%04d.pt' % epoch))
-        
-        
-    # if epoch % 20 == 0:
-    #     model.save(os.path.join(model_dir, '%04d.pt' % epoch))
+    #         val_epoch_loss.append(val_loss_list)
+    #         val_epoch_total_loss.append(val_loss.item())
+    #         wandb.log({"val/loss": val_loss.detach().item()})
+            
     # print epoch info
     epoch_info = 'Epoch %d/%d' % (epoch + 1, args.epochs)
     # wandb.log({"train/epoch": epoch + 1})
@@ -286,7 +302,7 @@ for epoch in range(args.initial_epoch, args.epochs):
     
     print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
     wandb.log({"train/epoch_loss": np.mean(epoch_total_loss), 'epoch': epoch + 1})
-    wandb.log({"val/epoch_loss": np.mean(val_epoch_total_loss), 'epoch': epoch + 1})
+    # wandb.log({"val/epoch_loss": np.mean(val_epoch_total_loss), 'epoch': epoch + 1})
     
 # final model save
 model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))
