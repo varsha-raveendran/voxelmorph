@@ -135,8 +135,6 @@ class Unet(nn.Module):
                 x = conv(x)
             if not self.half_res or level < (self.nb_levels - 2):
                 x = self.upsampling[level](x)
-                # print(x.shape)
-                # print(x_history[0].shape)
                 
                 x = torch.cat([x, x_history.pop()], dim=1)
 
@@ -424,12 +422,11 @@ class VxmDenseSemisupervised(LoadableModel):
         # warp image with flow field
         y_source = self.transformer(source, pos_flow)
         y_target = self.transformer(target, neg_flow) if self.bidir else None
-        # y_source_seg = self.transformer_seg(source_seg, pos_flow)
-        
+        y_source_seg = self.transformer(source_seg, pos_flow)         
         # return non-integrated flow field if training
         if not registration:
             
-            return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow)
+            return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow, y_source_seg)
         else:
             return y_source, pos_flow
 

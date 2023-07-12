@@ -39,7 +39,7 @@ if backend == 'pytorch':
     from . import torch
     from .torch import layers
     from .torch import networks
-    from .torch import networks_debug
+    from .torch import networks_dice
     from .torch import losses
     from .torch import nlst
     print("done")

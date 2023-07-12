@@ -6,3 +6,5 @@ build/
 wandb/
 data/oasis/
 *.tar
+full*
+overfit*

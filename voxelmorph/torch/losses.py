@@ -258,7 +258,6 @@ class Grad:
 
         df = [torch.mean(torch.flatten(f, start_dim=1), dim=-1) for f in dif]
         grad = sum(df) / len(df)
-
         if self.loss_mult is not None:
             grad *= self.loss_mult
 

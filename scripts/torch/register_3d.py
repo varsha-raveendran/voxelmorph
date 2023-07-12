@@ -43,7 +43,7 @@ import numpy as np
 import nibabel as nib
 import torch
 from eval_metrics import EvaluationMetrics
-import torchshow as ts
+# import torchshow as ts
 
 
 # import voxelmorph with pytorch backend
@@ -52,6 +52,8 @@ os.environ['VXM_BACKEND'] = 'pytorch'
 import voxelmorph as vxm   # nopep8
 import torchio as tio
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
+
 
 # parse commandline args
 parser = argparse.ArgumentParser()
@@ -108,7 +110,7 @@ add_feat_axis = not args.multichannel
 #https://nipy.org/nibabel/coordinate_systems.html
 
 test_dataset =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", "NLST_dataset_train_test_v1.json",
-                                downsampled=False, masked=False,
+                                downsampled=True, masked=False,
                             train_transform=None, is_norm=True, train=False)
 
 val_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
@@ -138,13 +140,17 @@ for batch_idx, batch in enumerate(val_dataloader):
     # predict
     moved, warp = model(input_moving, input_fixed, registration=True)
 
-    # save results
-    moved = moved.detach().cpu().numpy().squeeze()
+    # save results   
     
+    warp = F.interpolate(warp, scale_factor=2, mode='trilinear', align_corners=True) #1. upsample   
+            
+    moved = F.interpolate(moved,scale_factor=2, mode='trilinear')
+    moved = moved.detach().cpu().numpy().squeeze()
     moved_path = os.path.join(out_path + '/moved_imgs', f'moved_{str(val1).zfill(4)}_{str(val2).zfill(4)}.nii.gz')
     warped_path = os.path.join(out_path + '/disp_field', f'flow_{str(val1).zfill(4)}_{str(val2).zfill(4)}.nii.gz')
     vxm.py.utils.save_volfile(moved, moved_path, fixed_affine)
     flow = warp.detach().cpu().squeeze().numpy()
+    print(flow.shape)
     vxm.py.utils.save_volfile(flow, warped_path, fixed_affine)
     
     #Ref: https://learn2reg.grand-challenge.org/Submission/ 
