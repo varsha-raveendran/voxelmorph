@@ -116,7 +116,7 @@ test_dataset =  vxm.nlst.NLST("/vol/pluto/users/raveendr/data/NLST/", "NLST_data
 val_dataloader = DataLoader(test_dataset, batch_size=1, shuffle=False)
 
 # load and set up model
-model = vxm.networks.VxmDense.load(args.model, device)
+model = vxm.networks.VxmDenseSemisupervised.load(args.model, device)
 model.to(device)
 model.eval()
 out_path = args.output_path
@@ -138,20 +138,32 @@ for batch_idx, batch in enumerate(val_dataloader):
     fixed_affine = batch["fixed_affine"][0]
 
     # predict
-    moved, warp = model(input_moving, input_fixed, registration=True)
+    moved, warp = model(input_moving, input_fixed, batch["moving_mask"], registration=True)
 
     # save results   
-    
-    warp = F.interpolate(warp, scale_factor=2, mode='trilinear', align_corners=True) #1. upsample   
+    H=112
+    W=96
+    D=112
+    # warp = F.interpolate(warp, scale_factor=2, mode='trilinear', align_corners=True) #1. upsample   
+    disp_field= F.interpolate(warp,scale_factor=2,mode='trilinear').float().detach().cpu().squeeze()
+    print(disp_field.max(), disp_field.min())
+    # disp_field=((disp_field.permute(0,2,3,4,1))*(torch.tensor([D,W,H])-1)).flip(-1).float().squeeze().cpu().detach()
+    print(disp_field.shape)
+    warped_path = os.path.join(out_path + '/disp_field', f'flow_{str(val1).zfill(4)}_{str(val2).zfill(4)}.nii.gz')
+
+    nib.save(nib.Nifti1Image(disp_field.numpy(), fixed_affine), warped_path)
             
     moved = F.interpolate(moved,scale_factor=2, mode='trilinear')
     moved = moved.detach().cpu().numpy().squeeze()
     moved_path = os.path.join(out_path + '/moved_imgs', f'moved_{str(val1).zfill(4)}_{str(val2).zfill(4)}.nii.gz')
-    warped_path = os.path.join(out_path + '/disp_field', f'flow_{str(val1).zfill(4)}_{str(val2).zfill(4)}.nii.gz')
     vxm.py.utils.save_volfile(moved, moved_path, fixed_affine)
-    flow = warp.detach().cpu().squeeze().numpy()
-    print(flow.shape)
-    vxm.py.utils.save_volfile(flow, warped_path, fixed_affine)
+    # flow = warp.detach().cpu().squeeze().numpy()
+    
+    # affine = np.array([[-1, 0, 0, 0],  # nopep8
+    #                            [0, 0, 1, 0],  # nopep8
+    #                            [0, -1, 0, 0],  # nopep8
+    #                            [0, 0, 0, 1]], dtype=float)  # nopep8
+    # vxm.py.utils.save_volfile(flow, warped_path, affine)
     
     #Ref: https://learn2reg.grand-challenge.org/Submission/ 
     # The convention used for displacement fields depends on scipy's map_coordinates() 

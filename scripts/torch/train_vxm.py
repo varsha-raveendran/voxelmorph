@@ -94,6 +94,8 @@ parser.add_argument('--int-downsize', type=int, default=2,
 parser.add_argument('--bidir', action='store_true', help='enable bidirectional cost function')
 
 parser.add_argument('--data_json',  help='name of dataset json file')
+parser.add_argument('--masked', action='store_true', help='mask input?', default=True)
+
 
 # loss hyperparameters
 parser.add_argument('--image-loss', default='ncc',
@@ -231,16 +233,20 @@ for epoch in range(args.initial_epoch, args.epochs):
         # calculate total loss
         loss = 0
         loss_list = []
-        # for n, loss_function in enumerate(losses):
+        print(losses[1](y_true[1], y_pred[1 ]))
+        for n, loss_function in enumerate(losses):
             
-        #     curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
-        #     if math.isnan(curr_loss) == True:
-        #         breakpoint()
-                
-        #     loss_list.append(curr_loss.item())
-        #     loss += curr_loss
+            curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
+            if math.isnan(curr_loss) == True:
+                breakpoint()
+            print(n, "curr_loss: ", loss_function)
+            print(n, "curr_loss: ", curr_loss)
+            
+            loss_list.append(curr_loss.item())
+            loss += curr_loss
         
-        loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+        breakpoint()
+        # loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
         loss_list.append(loss.item())
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.detach().item())

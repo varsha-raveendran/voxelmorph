@@ -52,6 +52,7 @@ from torch.utils.data import DataLoader
 import torchio as tio
 import monai
 import torchinfo
+import bad_grad_viz as bad_grad
 
 
 import wandb
@@ -102,7 +103,9 @@ parser.add_argument('--image-loss', default='ncc',
                     help='image reconstruction loss - can be mse or ncc (default: mse)')
 parser.add_argument('--lambda', type=float, dest='weight', default=0.01,
                     help='weight of deformation loss (default: 0.01)')
-parser.add_argument('--masked', action='store_true', help='mask input?', default=True)
+parser.add_argument('--masked', action='store_true', help='mask input?')
+parser.add_argument('--dice_weight', type=float, dest='dice_weight', default=0.01,
+                    help='weight of dice loss (default: 0.01)')
 args = parser.parse_args()
 
 wandb.init(project="Vxm - dice", config=args)
@@ -133,7 +136,7 @@ seed = torch.Generator().manual_seed(42)
 
 # overfit_set = torch.utils.data.Subset(train_set, [2])
 # overfit_set = torch.utils.data.Subset(train_dataset, [2]*20)
-train_dataloader = DataLoader(train_dataset, batch_size=1, shuffle=True, num_workers=4)
+train_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4)
 val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4)
 print("Number of training samples: ", len(train_dataset))
 print("Number of val samples: ", len(valid_set))
@@ -231,13 +234,20 @@ best_validation_loss = float("inf")
 grad_loss = vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss
 grad_wt = args.weight
 print("grad_wt: ", grad_wt)
-# dice_loss = vxm.losses.Dice().loss
+dice_loss = vxm.losses.Dice().loss
 
-dice_loss = monai.losses.DiceLoss(include_background=False, softmax=False, to_onehot_y=False)
+# dice_loss = monai.losses.DiceLoss(include_background=True, to_onehot_y=True)
+dice_weight = args.dice_weight
+# dice_loss = monai.losses.MultiScaleLoss(dice_loss, scales=[0, 1, 2])
 transformer = vxm.layers.SpatialTransformer((224//2,192//2,224//2), mode="nearest").to(device)
-
+# torch.backends.cudnn.enabled = False
 # warp_nearest = monai.networks.blocks.Warp(mode="nearest", padding_mode="border")
 # warp_nearest_val = monai.networks.blocks.Warp(mode="nearest", padding_mode="border")
+# wandb.watch( model,log = 'all',
+#  log_freq = 10,
+ 
+#  log_graph = True
+# )
 
 # training loops
 for epoch in range(args.initial_epoch, args.epochs):
@@ -250,6 +260,7 @@ for epoch in range(args.initial_epoch, args.epochs):
     for batch_idx, batch in enumerate(train_dataloader):
         # print(batch["fixed_name"])
         # print(batch["moving_name"])
+        
         fixed_img = batch["fixed_img"].to(device)
         moving_img = batch["moving_img"].to(device)
         fixed_mask = batch["fixed_mask"].to(device)
@@ -274,42 +285,47 @@ for epoch in range(args.initial_epoch, args.epochs):
         #     loss_list.append(curr_loss.item())
         #     loss += curr_loss
             
-        # sim_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+        sim_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
         
-        sim_loss = image_loss_func(y_pred[0], y_true[0])
-        loss_list.append(sim_loss.item())
+        # sim_loss = image_loss_func(y_true[0], y_pred[0])
         
-        grad_loss_val = grad_loss(y_pred[1], y_true[1])         
         
-        loss_list.append(grad_loss_val.item())
+        grad_loss_val = grad_loss(y_true[1],y_pred[1])   
+        
         y_pred[2][y_pred[2] > 1] = 1
-
-        # warped_seg = warp_nearest(moving_mask, y_pred[2])
-        val_outputs = torch.nn.functional.one_hot( y_pred[2].squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)
         
-        val_labels = torch.nn.functional.one_hot(fixed_mask.squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)        
-
-            
-        dice_loss_val = dice_loss(val_labels, val_outputs)         
-        loss = sim_loss + (grad_loss_val * grad_wt) + (dice_loss_val* 1.0)
-        loss_list.append(dice_loss_val.item())
+       
+        dice_loss_val = dice_loss(fixed_mask, y_pred[2]) 
+        
+        loss = sim_loss + grad_loss_val  * grad_wt + dice_loss_val * dice_weight
+        # get_dot = bad_grad.register_hooks(loss)
+       
+        # backpropagate and optimize
+        optimizer.zero_grad()
+        
+        loss.backward()
+        # dot = get_dot()
+        # dot.save('dot_files/tmp' + batch_idx +'.dot')
+        
+        optimizer.step()
+        loss_list.append(sim_loss.detach().item())
+        loss_list.append(grad_loss_val.detach().item())
+        loss_list.append(dice_loss_val.detach().item())
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.detach().item())
    
         wandb.log({"train/loss": loss.detach().item(),"train/ncc": loss_list[0],
                   "train/grad": loss_list[1],"train/dice_loss":loss_list[2]})
    
-        # backpropagate and optimize
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
+   
         epoch_step_time.append(time.time() - step_start_time)
-
+        
+    
     model.eval()
     with torch.no_grad():
         val_epoch_loss = []
         val_epoch_total_loss = []
+        dice_all = []
         for batch_idx, batch in enumerate(val_dataloader):
             fixed_img = batch["fixed_img"].to(device)
             moving_img = batch["moving_img"].to(device)
@@ -323,72 +339,70 @@ for epoch in range(args.initial_epoch, args.epochs):
             # calculate total loss
             val_loss = 0
             val_loss_list = []
-            # for n, loss_function in enumerate(losses):
-                
-            #     curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
-            #     if math.isnan(curr_loss) == True:
-            #         breakpoint()
-                    
-            #     val_loss_list.append(curr_loss.item())
-            #     val_loss += curr_loss
-            # val_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
-            val_loss = image_loss_func(y_pred[0], y_true[0])
+           
+            # val_sim_loss = image_loss_func(y_true[0], y_pred[0])
+            val_sim_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+            
+            val_grad_loss = grad_loss(y_true[1],y_pred[1])   
+            y_pred[2][y_pred[2] > 1] = 1
+            
+            
+            val_dice_loss = dice_loss(fixed_mask, y_pred[2]) 
+        
+            val_loss = val_sim_loss + (val_grad_loss  * grad_wt )+ (val_dice_loss * dice_weight)
+            
             val_loss_list.append(val_loss.item())
-            warped_seg = transformer(moving_mask, y_pred[1])
-            val_outputs = torch.nn.functional.one_hot( warped_seg.squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)
-        
-            val_labels = torch.nn.functional.one_hot(fixed_mask.squeeze(1).to(torch.int64), 2).permute(0,4,1,2,3)      
-        
-            dice_score = dice_loss(val_labels, val_outputs) 
-            val_loss += (dice_score * 1.0)
+
             val_epoch_loss.append(val_loss_list)
             val_epoch_total_loss.append(val_loss.item())
-            wandb.log({"val/loss": val_loss.detach().item()})
+            dice_all.append(val_dice_loss.item())
+            wandb.log({"val/ncc": val_sim_loss.detach().item(),
+                  "val/grad": val_grad_loss.detach().item(),"val/loss": val_loss.detach().item(), "val/dice": val_dice_loss.detach().item()})
             
-            if epoch % 100 == 0:
-                test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")            
+            # if epoch % 30 == 0:
+            #     test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")            
 
-                table_columns = [ 'moving - source', 'fixed - target', 'warped', 'flow_x', 'flow_y', 
-                                'mask_warped', 'mask_fixed', 'dice']
-                #'displacement_magn', *list(metrics.keys())
-                table_results = wandb.Table(columns = table_columns)
-                fixed = fixed_img.to('cpu').detach().numpy()
-                fixed = fixed[0,0,:,48,:]
-                moving = moving_img.to('cpu').detach().numpy()
-                moving = moving[0,0,:,48,:]
-                warped = y_pred[0].to('cpu').detach().numpy()
-                warped = warped[0,0,:,48,:]
+            #     table_columns = [ 'moving - source', 'fixed - target', 'warped', 'flow_x', 'flow_y', 
+            #                     'mask_warped', 'mask_fixed', 'dice']
+            #     #'displacement_magn', *list(metrics.keys())
+            #     table_results = wandb.Table(columns = table_columns)
+            #     fixed = fixed_img.to('cpu').detach().numpy()
+            #     fixed = fixed[0,0,:,48,:]
+            #     moving = moving_img.to('cpu').detach().numpy()
+            #     moving = moving[0,0,:,48,:]
+            #     warped = y_pred[0].to('cpu').detach().numpy()
+            #     warped = warped[0,0,:,48,:]
                 
-                target_fixed = fixed_mask.to('cpu').detach().numpy()
-                target_fixed = target_fixed[0,0,:,48,:]
-                mask_fixed = wandb.Image(fixed, masks={
-                            "predictions": {
-                                "mask_data": target_fixed
+            #     target_fixed = fixed_mask.to('cpu').detach().numpy()
+            #     target_fixed = target_fixed[0,0,:,48,:]
+            #     mask_fixed = wandb.Image(fixed, masks={
+            #                 "predictions": {
+            #                     "mask_data": target_fixed
                                 
-                            }
-                            })
+            #                 }
+            #                 })
                 
-                warped_seg = warped_seg.to('cpu').detach().numpy()
-                warped_seg = warped_seg[0,0,:,48,:]
+            #     warped_seg = y_pred[2].to('cpu').detach().numpy()
+            #     warped_seg = warped_seg[0,0,:,48,:]
 
-                mask_warped = wandb.Image(warped, masks={
-                            "predictions": {
-                                "mask_data": warped_seg
+            #     mask_warped = wandb.Image(warped, masks={
+            #                 "predictions": {
+            #                     "mask_data": warped_seg
                                 
-                            }
-                            })
+            #                 }
+            #                 })
 
-                flow_x = y_pred[1][0,0,:,48,:].to('cpu').detach().numpy()
-                flow_y = y_pred[1][0,1,:,48,:].to('cpu').detach().numpy()
+            #     flow_x = y_pred[1][0,0,:,48,:].to('cpu').detach().numpy()
+            #     flow_y = y_pred[1][0,1,:,48,:].to('cpu').detach().numpy()
                 
-                table_results.add_data(wandb.Image(moving), wandb.Image(fixed),
-                                       wandb.Image(warped),wandb.Image(flow_x), 
-                                       wandb.Image(flow_y), mask_warped ,mask_fixed, dice_score)
+            #     table_results.add_data(wandb.Image(moving), wandb.Image(fixed),
+            #                            wandb.Image(warped),wandb.Image(flow_x), 
+            #                            wandb.Image(flow_y), mask_warped ,mask_fixed, val_dice_loss.item())
                 
-                test_data_at.add(table_results, "predictions")
-                wandb.run.log_artifact(test_data_at) 
+            #     test_data_at.add(table_results, "predictions")
+            #     wandb.run.log_artifact(test_data_at) 
         # save model checkpoint
-    if np.mean(val_epoch_total_loss) < best_validation_loss:
+    if (np.mean(val_epoch_total_loss) - best_validation_loss) < 0.0001:
         best_validation_loss = np.mean(val_epoch_total_loss)
         model.save(os.path.join(model_dir, '%04d.pt' % epoch))
 
@@ -400,7 +414,7 @@ for epoch in range(args.initial_epoch, args.epochs):
        
     print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
     wandb.log({"train/epoch_loss": np.mean(epoch_total_loss), "val/epoch_loss": np.mean(val_epoch_total_loss),
-               'epoch': epoch})
+               "val/val_epoch_dice": np.mean(dice_all), 'epoch': epoch})
     
 # final model save
 model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))

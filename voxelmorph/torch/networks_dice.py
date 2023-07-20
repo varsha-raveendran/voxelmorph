@@ -383,7 +383,8 @@ class VxmDenseSemisupervised(LoadableModel):
 
         # configure transformer
         self.transformer = layers.SpatialTransformer(inshape)
-        # self.transformer_seg = layers.SpatialTransformer(inshape, mode='nearest')
+        self.transformer_seg = layers.SpatialTransformer(inshape)
+        self.transformer_seg_inf = layers.SpatialTransformer(inshape, mode="nearest")
         
 
     def forward(self, source, target, source_seg, registration=False):
@@ -422,13 +423,18 @@ class VxmDenseSemisupervised(LoadableModel):
         # warp image with flow field
         y_source = self.transformer(source, pos_flow)
         y_target = self.transformer(target, neg_flow) if self.bidir else None
-        y_source_seg = self.transformer(source_seg, pos_flow)         
+        
+        if not registration:
+            y_source_seg = self.transformer_seg(source_seg, pos_flow)   
+        else:
+            print("nearest")
+            y_source_seg = self.transformer_seg_inf(source_seg, pos_flow)      
         # return non-integrated flow field if training
         if not registration:
             
             return (y_source, y_target, preint_flow) if self.bidir else (y_source, preint_flow, y_source_seg)
         else:
-            return y_source, pos_flow
+            return y_source, pos_flow, y_source_seg
 
 
 class ConvBlock(nn.Module):

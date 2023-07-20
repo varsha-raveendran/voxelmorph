@@ -82,9 +82,9 @@ class NLST(torch.utils.data.Dataset):
         fixed_img=torch.from_numpy(fixed_img).float()
         moving_img=torch.from_numpy(moving_img).float()
         
-        fixed_mask=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata()).float()
+        fixed_mask=torch.from_numpy(nib.load(fix_path.replace('images', 'masks')).get_fdata())
         
-        moving_mask=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata()).float()
+        moving_mask=torch.from_numpy(nib.load(mov_path.replace('images', 'masks')).get_fdata())
         fixed_kp =  0
         moving_kp = 0
         if not self.train:
@@ -110,8 +110,8 @@ class NLST(torch.utils.data.Dataset):
             if not self.train:
                 fixed_kp=torch.from_numpy(np.genfromtxt(fix_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=',')) //2
                 moving_kp=torch.from_numpy(np.genfromtxt(mov_path.replace('images','keypoints').replace('nii.gz','csv'),delimiter=',')) //2
-                fixed_kp=(fixed_kp.flip(-1)/torch.tensor(self.shape))*2-1
-                moving_kp=(moving_kp.flip(-1)/torch.tensor(self.shape))*2-1    
+                # fixed_kp=(fixed_kp.flip(-1)/torch.tensor(self.shape))*2-1
+                # moving_kp=(moving_kp.flip(-1)/torch.tensor(self.shape))*2-1    
                 fixed_kp = fixed_kp.numpy()
                 moving_kp = moving_kp.numpy()
         
@@ -132,10 +132,10 @@ class NLST(torch.utils.data.Dataset):
         
         return { "fixed_name" : fix_idx,
                 "moving_name" : mov_idx,
-                "fixed_img" : fixed_img, 
-                "moving_img" : moving_img, 
-                "fixed_mask" : fixed_mask, 
-                "moving_mask" : moving_mask,
+                "fixed_img" : fixed_img.float(), 
+                "moving_img" : moving_img.float(), 
+                "fixed_mask" : fixed_mask.float(), 
+                "moving_mask" : moving_mask.float(),
                 "zero_flow_field" : zeros,
                 "fixed_affine" : fixed_affine,
                 "fixed_kp" : fixed_kp,
