@@ -8,3 +8,7 @@ data/oasis/
 *.tar
 full*
 overfit*
+log_1.txt
+mri_lncc_20.07/
+temp_mri/
+

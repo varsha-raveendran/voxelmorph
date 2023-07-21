@@ -254,6 +254,7 @@ class VxmDense(LoadableModel):
         '''
 
         # concatenate inputs and propagate unet
+        # print("source", source.shape)
         x = torch.cat([source, target], dim=1)
         x = self.unet_model(x)
         # transform into flow field
