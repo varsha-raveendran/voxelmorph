@@ -125,7 +125,7 @@ train_dataset =  mri_liver.MRILiverPairwise("/home/varsha/data/Liver_2d/", 'pair
 train_set, valid_set = data.random_split(train_dataset, [int(len(train_dataset) * 0.8), int(len(train_dataset) * 0.2)], 
                                         generator=seed)
 
-train_dataloader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4)
+train_dataloader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4,pin_memory = True)
 val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4)
 
 print("Number of training samples: ", len(train_dataset))
@@ -213,18 +213,27 @@ for epoch in range(args.initial_epoch, args.epochs):
     epoch_loss = []
     epoch_total_loss = []
     epoch_step_time = []
+    training_loader_iter = iter(train_dataloader)
 
     for step in tqdm(range(args.steps_per_epoch)):
         # print(step)
     # for batch_idx, batch in enumerate(train_dataloader):
-        batch = next(iter(train_dataloader))
-        fixed_img = batch["fixed_img"].to(device)
-        moving_img = batch["moving_img"].to(device)
+        batch = next(training_loader_iter)
+        fixed_img = batch["fixed_img"].to(device,non_blocking=True)
+        moving_img = batch["moving_img"].to(device, non_blocking=True)
+        fix_idx = batch["fixed_name"]
+        mov_idx = batch["moving_name"]
+        # print(batch["data"].shape)
+        # print(fix_idx)
+        # print(batch["data"][:,:,:,:,42])
+        # fixed_img = batch["data"][:,:,:,:,fix_idx[0]].to(device)
+        # moving_img = batch["data"][:,:,:,:,mov_idx[0]].to(device)
         
+        # print(fixed_img.shape)
         
         # fixed_mask = batch["fixed_mask"].to(device)
         # moving_mask = batch["moving_mask"].to(device)
-        zero_ff = batch["zero_flow_field"].to(device)
+        zero_ff = batch["zero_flow_field"].to(device, non_blocking=True)
         step_start_time = time.time()
         
         y_pred = model(moving_img, fixed_img) 
@@ -245,16 +254,16 @@ for epoch in range(args.initial_epoch, args.epochs):
         #     loss_list.append(curr_loss.item())
         #     loss += curr_loss
         
-        loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
-        # loss = image_loss_func(y_true[0], y_pred[0])
+        # loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+        loss = image_loss_func(y_true[0], y_pred[0])
         loss_list.append(loss.item())
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.detach().item())
-        wandb.log({"train/loss": loss.detach().item(), "train/ncc_loss": loss_list[0]})
+        wandb.log({"train/loss": loss.detach().item(), "train/" + args.image_loss: loss_list[0]})
         # wandb.log({"train/grad_loss": loss_list[1]})
         
         # backpropagate and optimize
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         loss.backward()
         optimizer.step()
         
@@ -291,7 +300,7 @@ for epoch in range(args.initial_epoch, args.epochs):
             val_epoch_loss.append(val_loss_list)
             val_epoch_total_loss.append(val_loss.item())
             wandb.log({"val/loss": val_loss.detach().item()})
-            if epoch % 50 == 0 and step < 20:
+            if epoch % 10 == 0 and step < 20:
                 test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")            
 
                 table_columns = [ 'moving - source', 'fixed - target', 'warped', 'flow_x', 
@@ -336,7 +345,7 @@ for epoch in range(args.initial_epoch, args.epochs):
     # val_loss_info = 'val_loss: %.4e  (%s)' % (np.mean(val_epoch_total_loss), val_losses_info)
     
     print(' - '.join((epoch_info, time_info, loss_info)), flush=True)
-    wandb.log({"train/epoch_loss": np.mean(epoch_total_loss), 'epoch': epoch , "val/epoch_loss": np.mean(val_epoch_total_loss),})
+    # wandb.log({"train/epoch_loss": np.mean(epoch_total_loss), 'epoch': epoch , "val/epoch_loss": np.mean(val_epoch_total_loss),})
     
 # final model save
 model.save(os.path.join(model_dir, '%04d.pt' % args.epochs))

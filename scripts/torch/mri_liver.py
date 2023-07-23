@@ -1,6 +1,7 @@
 import nibabel as nib
 import skimage.transform as skTrans
 import torch
+import torchio as tio
 
 import os
 import json
@@ -27,7 +28,8 @@ class MRILiverPairwise(torch.utils.data.Dataset):
                 
                 self.__init_dataset(self.image_dir)
 
-
+                # self.transform = tio.CropOrPad((512,512,129))
+                
 
                 #         if self.train :
                 #             self.type_data = 'training_paired_images'
@@ -55,15 +57,24 @@ class MRILiverPairwise(torch.utils.data.Dataset):
 
                 img_id = self.data_pairs[idx]['img_path']
                 
-                fixed_img = self.volumes[img_id][fix_idx]
+                volume = nib.load(img_id)
                 
-                # fixed_img = volume[...,fix_idx]
+                affine = volume.affine
+                data = volume.get_fdata()
+                W, H, D = volume.shape
+                
+                volume = skTrans.resize(data, (400,400, D), order=1, preserve_range=True)
+                
+                # fixed_img = self.volumes[img_id][fix_idx]
+                
+                fixed_img = volume[...,fix_idx]
+                moving_img = volume[...,mov_idx]
                 #         fixed_affine = fixed_img.affine
                 #         fixed_img = fixed_img.get_fdata()
 
-                moving_img = self.volumes[img_id][mov_idx]
-                fixed_img = skTrans.resize(fixed_img, (400,400), order=1, preserve_range=True)
-                moving_img = skTrans.resize(moving_img, (400,400), order=1, preserve_range=True)
+                # moving_img = self.volumes[img_id][mov_idx]
+                # fixed_img = skTrans.resize(fixed_img, (400,400), order=1, preserve_range=True)
+                # moving_img = skTrans.resize(moving_img, (400,400), order=1, preserve_range=True)
 
                 fixed_img=torch.from_numpy(fixed_img).float()
                 moving_img=torch.from_numpy(moving_img).float()
@@ -74,7 +85,7 @@ class MRILiverPairwise(torch.utils.data.Dataset):
                 #         fixed_mask = fixed_mask.unsqueeze(0)
                 #         moving_mask = moving_mask.unsqueeze(0)
 
-                shape = fixed_img.shape[1:-1]
+                shape = (400, 400)
 
                 zeros = torch.zeros((1, *shape, len(shape)))
 
@@ -82,8 +93,9 @@ class MRILiverPairwise(torch.utils.data.Dataset):
 
                 return { "fixed_name" : fix_idx,
                         "moving_name" : mov_idx,
-                        "fixed_img" : fixed_img, 
+                        "fixed_img" : fixed_img,
                         "moving_img" : moving_img,
+                        # "data" : torch.from_numpy(volume).float().unsqueeze(0), 
                         "zero_flow_field" : zeros} 
                 #                 "fixed_mask" : fixed_mask, 
                 #                 "moving_mask" : moving_mask,
