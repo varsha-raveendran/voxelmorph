@@ -115,22 +115,24 @@ seed = torch.Generator().manual_seed(42)
 # train_set, valid_set = data.random_split(train_dataset, [train_set_size, valid_set_size], 
                                         #  generator=seed)
 
+print(args.masked)
 
-
-train_dataset =  mri_liver.MRILiverPairwise("/home/varsha/data/Liver_2d/", 'pairwise_all_preprocessed.json',
+train_dataset =  mri_liver.MRILiverPairwiseEndExhale("/home/varsha/data/Liver_2d/", 'pairwise_with_fixed_150.json',
                                 downsampled=False, 
-                                masked=False,train=True,
+                                masked=args.masked,train=True,
                              is_norm=True)
 # overfit_set = torch.utils.data.Subset(train_dataset, [2]*20)
-train_set, valid_set = data.random_split(train_dataset, [int(len(train_dataset) * 0.8), int(len(train_dataset) * 0.2)], 
+train_length = int(len(train_dataset) * 0.9)
+train_set, valid_set = data.random_split(train_dataset, [train_length, 
+                                                         len(train_dataset) - train_length], 
                                         generator=seed)
 
-valid_set = torch.utils.data.Subset(valid_set, range(20))
+# valid_set = torch.utils.data.Subset(valid_set, range(20))
 train_dataloader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=4,pin_memory = True)
 val_dataloader = DataLoader(valid_set, batch_size=1, shuffle=False, num_workers=4,pin_memory = True)
 
 print("Number of training samples: ", len(train_dataset))
-# print("Number of val samples: ", len(valid_set))
+print("Number of val samples: ", len(valid_set))
 
 # prepare model folder
 model_dir = args.model_dir
@@ -214,54 +216,38 @@ for epoch in range(args.initial_epoch, args.epochs):
     epoch_loss = []
     epoch_total_loss = []
     epoch_step_time = []
-    training_loader_iter = iter(train_dataloader)
+    # training_loader_iter = iter(train_dataloader)
 
-    for step in tqdm(range(args.steps_per_epoch)):
+    # for step in tqdm(range(args.steps_per_epoch)):
         # print(step)
-    # for batch_idx, batch in enumerate(train_dataloader):
-        batch = next(training_loader_iter)
+    for batch_idx, batch in enumerate(tqdm(train_dataloader)):
+        # batch = next(training_loader_iter)
         fixed_img = batch["fixed_img"].to(device,non_blocking=True)
         moving_img = batch["moving_img"].to(device, non_blocking=True)
         fix_idx = batch["fixed_name"]
         mov_idx = batch["moving_name"]
-        # print(batch["data"].shape)
-        # print(fix_idx)
-        # print(batch["data"][:,:,:,:,42])
-        # fixed_img = batch["data"][:,:,:,:,fix_idx[0]].to(device)
-        # moving_img = batch["data"][:,:,:,:,mov_idx[0]].to(device)
         
-        # print(fixed_img.shape)
-        
-        # fixed_mask = batch["fixed_mask"].to(device)
-        # moving_mask = batch["moving_mask"].to(device)
         zero_ff = batch["zero_flow_field"].to(device, non_blocking=True)
         step_start_time = time.time()
-        
         y_pred = model(moving_img, fixed_img) 
         y_true = (fixed_img, zero_ff ) 
 
         # calculate total loss
         loss = 0
         loss_list = []
-        # print(losses[1](y_true[1], y_pred[1 ]))
-        # for n, loss_function in enumerate(losses):
-            
-        #     curr_loss = loss_function(y_true[n], y_pred[n]) * weights[n]
-        #     if math.isnan(curr_loss) == True:
-        #         breakpoint()
-        #     print(n, "curr_loss: ", loss_function)
-        #     print(n, "curr_loss: ", curr_loss)
-            
-        #     loss_list.append(curr_loss.item())
-        #     loss += curr_loss
+                
+        sim_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+        grad_loss = losses[1](y_true[1], y_pred[1])
         
-        # loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
-        loss = image_loss_func(y_true[0], y_pred[0])
-        loss_list.append(loss.item())
+        loss = sim_loss + grad_loss * args.weight
+        
+        # loss = image_loss_func(y_true[0], y_pred[0])
+        loss_list.append(sim_loss.item())
+        loss_list.append(grad_loss.item())
         epoch_loss.append(loss_list)
         epoch_total_loss.append(loss.detach().item())
-        wandb.log({"train/loss": loss.detach().item(), "train/" + args.image_loss: loss_list[0]})
-        # wandb.log({"train/grad_loss": loss_list[1]})
+        wandb.log({"train/loss": loss.detach().item(), "train/" + args.image_loss: loss_list[0], 
+                   "train/grad_loss": loss_list[1]})
         
         # backpropagate and optimize
         optimizer.zero_grad(set_to_none=True)
@@ -278,7 +264,7 @@ for epoch in range(args.initial_epoch, args.epochs):
         val_epoch_total_loss = []
         # val_loader_iter = iter(val_dataloader)
         # for step in tqdm(range(50)):
-        for batch_idx, batch in enumerate(val_dataloader):
+        for batch_idx, batch in enumerate(tqdm(val_dataloader)):
             # batch = next(val_loader_iter)
             fixed_img = batch["fixed_img"].to(device)
             moving_img = batch["moving_img"].to(device)
@@ -299,12 +285,18 @@ for epoch in range(args.initial_epoch, args.epochs):
             #     val_loss += curr_loss
             
             # val_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
-            val_loss = image_loss_func(y_true[0], y_pred[0])
+            # val_loss = image_loss_func(y_true[0], y_pred[0])
+            
+            sim_loss = similarity_loss(lncc_loss, y_pred[0], y_true[0])
+            grad_loss = losses[1](y_true[1], y_pred[1])
+        
+            val_loss = sim_loss + grad_loss * args.weight
+            
             val_loss_list.append(val_loss.item())
             val_epoch_loss.append(val_loss_list)
             val_epoch_total_loss.append(val_loss.item())
             wandb.log({"val/loss": val_loss.detach().item()})
-            if epoch % 10 == 0 and step < 20:
+            if epoch % 50 == 0 and batch_idx < 20:
                 test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")            
 
                 table_columns = [ 'moving - source', 'fixed - target', 'warped', 'flow_x', 
