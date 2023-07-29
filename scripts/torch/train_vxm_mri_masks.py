@@ -94,7 +94,7 @@ parser.add_argument('--int-downsize', type=int, default=2,
 parser.add_argument('--bidir', action='store_true', help='enable bidirectional cost function')
 
 parser.add_argument('--data_json',  help='name of dataset json file')
-parser.add_argument('--masked', action='store_true', help='mask input?', default=True)
+parser.add_argument('--masked', action='store_true', help='mask input?', default=False)
 
 
 # loss hyperparameters
@@ -296,7 +296,7 @@ for epoch in range(args.initial_epoch, args.epochs):
             val_epoch_loss.append(val_loss_list)
             val_epoch_total_loss.append(val_loss.item())
             wandb.log({"val/loss": val_loss.detach().item()})
-            if epoch % 50 == 0 and batch_idx < 20:
+            if (epoch % 10 == 0) and (batch_idx in [1, 50, 100, 250, 180, 360, 665]):
                 test_data_at = wandb.Artifact("test_samples_" + str(wandb.run.id), type="predictions")            
 
                 table_columns = [ 'moving - source', 'fixed - target', 'warped', 'flow_x', 

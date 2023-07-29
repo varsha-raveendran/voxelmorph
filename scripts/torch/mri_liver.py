@@ -6,6 +6,8 @@ import json
 
 import nibabel as nib
 import skimage.transform as skTrans
+import numpy as np
+import scipy.ndimage
 
 
 class MRILiverPairwiseEndExhale(torch.utils.data.Dataset):
@@ -25,7 +27,7 @@ class MRILiverPairwiseEndExhale(torch.utils.data.Dataset):
 
                 self.data_pairs = self.dataset_json["training"]
                 self.volumes = {}
-                
+                self.structure=np.ones((10,10))
 #                 self.__init_dataset(self.image_dir)
 
                 
@@ -77,11 +79,12 @@ class MRILiverPairwiseEndExhale(torch.utils.data.Dataset):
                 # moving_img = self.volumes[img_id][mov_idx]
                 # fixed_img = skTrans.resize(fixed_img, (400,400), order=1, preserve_range=True)
                 # moving_img = skTrans.resize(moving_img, (400,400), order=1, preserve_range=True)
-
+                fixed_mask = torch.from_numpy(scipy.ndimage.binary_dilation(fixed_mask,self.structure.astype(float))).float()
+                moving_mask = torch.from_numpy(scipy.ndimage.binary_dilation(moving_mask,self.structure.astype(float))).float()
                 fixed_img=torch.from_numpy(fixed_img).float()
                 moving_img=torch.from_numpy(moving_img).float()
-                fixed_mask=torch.from_numpy(fixed_mask).float()
-                moving_mask=torch.from_numpy(moving_mask).float()
+                # fixed_mask=torch.from_numpy(fixed_mask).float()
+                # moving_mask=torch.from_numpy(moving_mask).float()
                 if self.masked:
                     fixed_img = fixed_img * fixed_mask
                     moving_img = moving_img * moving_mask
